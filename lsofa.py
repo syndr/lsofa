@@ -23,13 +23,16 @@ import pandas
 COLUMNS = ("COMMAND", "PID", "TID", "TASCMD", "USER", "FD", "TYPE", "DEVICE", "SIZE/OFF", "NODE", "NAME")
 # fmt: on
 
+# Define a custom formatter class
+class CustomFormatter(argparse.RawTextHelpFormatter):
+    pass
 
 def get_args():
     parser = argparse.ArgumentParser(
         description="Parse lsof output and show top results\n"
                     "example: lsof | python3 lsofa.py -g COMMAND,TASCMD,NAME -t 10\n"
-                    "example: python3 lsofa.py lsof_output.txt -g COMMAND,TASCMD,NAME -t 10"
-
+                    "example: python3 lsofa.py lsof_output.txt -g COMMAND,TASCMD,NAME -t 10",
+        formatter_class=CustomFormatter
     )
     parser.add_argument(
         "lsof_output_file", nargs="?", default=None, help="file containing lsof output"
@@ -44,6 +47,12 @@ def get_args():
     )
     parser.add_argument(
         "-t", "--top", default=None, help="number of top results to show"
+    )
+    parser.add_argument(
+        "-o", "--output", default=None, help="output file (csv)"
+    )
+    parser.add_argument(
+        "--handles", action="store_true", help="show number of file handles per process (counting towards ulimit)"
     )
 
     return parser.parse_args()
@@ -119,8 +128,17 @@ def main():
 
     lsof_dataframe = parse(lsof_output)
 
+    if args.handles:
+        lsof_types = ['REG', 'DIR', 'CHR', 'BLK', 'FIFO', 'SOCK', 'a_inode', 'unix', 'netlink', 'IPv4', 'IPv6']
+        lsof_fd_special_types = ['cwd', 'rtd', 'txt', 'mem', 'DEL', 'anon_inode']
+        lsof_dataframe = lsof_dataframe[lsof_dataframe['TYPE'].isin(lsof_types)]
+        lsof_dataframe = lsof_dataframe[~lsof_dataframe['FD'].isin(lsof_fd_special_types)]
+        # Drop rows with a TID (likely other threads)
+        lsof_dataframe = lsof_dataframe[lsof_dataframe['TID'] == '']
+
     if args.groupings:
         groupings = args.groupings.split(",")
+
         lsof_dataframe = (
             lsof_dataframe.groupby(groupings)
             .size()
@@ -130,8 +148,12 @@ def main():
     if args.top:
         lsof_dataframe = lsof_dataframe.head(int(args.top))
 
-    print(lsof_dataframe.to_markdown(index=False))
+    if args.output:
+        lsof_dataframe.to_csv(args.output, index=False)
+    else:
+        print(lsof_dataframe.to_markdown(index=False))
 
 
 if __name__ == "__main__":
     main()
+
