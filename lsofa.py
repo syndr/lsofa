@@ -407,6 +407,7 @@ def trend(series_path, top=None):
     fds that appeared partway through are exactly what a leak looks like.
     """
     first, last, seen = {}, {}, set()
+    first_ts = None
     try:
         with open(series_path, newline="") as handle:
             for row in csv.DictReader(handle):
@@ -418,9 +419,17 @@ def trend(series_path, top=None):
                         f"error: {series_path} is not a --classify series "
                         f"(expected COMMAND,PID,CLASS,count columns)"
                     )
-                seen.add(row.get("ts", ""))
+                stamp = row.get("ts", "")
+                if first_ts is None:
+                    first_ts = stamp
+                seen.add(stamp)
                 if key not in first:
-                    first[key] = count
+                    # Baseline a class at its own first reading only if that
+                    # reading is from the first sample. A class that shows up
+                    # later started at zero -- seeding it with its debut value
+                    # would report delta 0 for the row most likely to be the
+                    # leak.
+                    first[key] = count if stamp == first_ts else 0
                 last[key] = count
     except OSError as problem:
         sys.exit(f"error: cannot read {series_path}: {problem}")
