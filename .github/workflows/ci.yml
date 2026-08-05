@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push supersedes the first; no point finishing a run for a commit
+# that has already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-bare:
+    # The contract job. --classify/--trend must run on an interpreter with no
+    # pandas/numpy anywhere, because fdwatch drives them from a systemd timer
+    # and paying a pandas import per sample would make interval sampling too
+    # expensive to run. Nothing but discipline keeps those imports lazy, so
+    # this proves it on every push.
+    #
+    # Deliberately installs pytest and nothing else. Widen the matrix freely --
+    # with no compiled dependencies these runs cost almost nothing.
+    runs-on: ubuntu-latest
+    name: bare py${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Run the dependency-free suite
+        run: >
+          uv run --no-project --with pytest --python ${{ matrix.python }}
+          pytest -q -m "not needs_pandas"
+
+  test-full:
+    # Everything, including the lsof-parsing path. Narrow on purpose: installing
+    # pandas is the slow part of this workflow and that code is not sensitive to
+    # the interpreter version, so the floor and the current release are enough.
+    runs-on: ubuntu-latest
+    name: full py${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Run the full suite
+        run: >
+          uv run --no-project --with pytest --with pandas --with numpy
+          --with tabulate --python ${{ matrix.python }} pytest -q
+
+  smoke:
+    # Exercising the CLI end to end catches what unit tests miss: a suite can
+    # pass while the table renderer raises, because nothing actually drew a
+    # table. Runs against the runner's own processes, so it needs no fixtures.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Prove lsof exists
+        # Assuming a runner image ships a tool is how a green build starts
+        # meaning "the tool was missing" instead of "the code works".
+        run: lsof -v 2>&1 | head -2
+
+      - name: Dependency-free subcommands
+        run: |
+          set -euo pipefail
+          run() { uv run --no-project --python 3.13 python lsofa.py "$@"; }
+
+          run --help > /dev/null
+          echo "--- classify by comm name"
+          run --classify python3 -t 5
+          echo "--- classify by pid, appended twice"
+          run --classify $$ -o series.csv --append
+          run --classify $$ -o series.csv --append
+          test "$(grep -c '^ts,' series.csv)" = "1"   # header written once
+          echo "--- trend over the series"
+          run --trend series.csv -t 5
+
+      - name: lsof-backed subcommands
+        run: |
+          set -euo pipefail
+          run() {
+            uv run --no-project --with pandas --with numpy --with tabulate \
+              --python 3.13 python lsofa.py "$@"
+          }
+
+          echo "--- limits"
+          run --limits -t 5
+          echo "--- grouping, and --diff between two snapshots"
+          run --limits -o before.csv
+          run --limits -o after.csv
+          run --diff before.csv after.csv -t 5
+          echo "--- reading piped lsof output"
+          lsof -U 2>/dev/null | run -g COMMAND,NAME -t 5
