@@ -1,0 +1,33 @@
+[project]
+name = "lsofa"
+version = "0.1.0"
+description = "Parse lsof output, group by fields, and hunt file-descriptor leaks"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "GPL-3.0-or-later" }
+# Deliberately empty. pandas/numpy/tabulate are needed only by the lsof-parsing
+# paths and are imported lazily inside the functions that use them, so
+# --classify/--trend run on a bare interpreter. That is not a nicety: fdwatch
+# invokes --classify from a systemd timer every few minutes, and paying a pandas
+# import per sample would make interval sampling too expensive to run at all.
+# `pip install pandas numpy tabulate` for the lsof side -- see README.
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+# Not an installable package -- lsofa.py is a single script you copy onto a host
+# (see README). This block exists for `requires-python`, the dev group, and
+# pytest config only, so tell uv not to try building a wheel from it.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# lsofa.py lives at the repo root and is not packaged; put the root on sys.path
+# so `import lsofa` resolves. Importing it is side-effect-free -- everything
+# executable sits behind `if __name__ == "__main__"`.
+pythonpath = ["."]
+markers = [
+    "needs_pandas: exercises the lsof-parsing path, which requires pandas/numpy",
+]
